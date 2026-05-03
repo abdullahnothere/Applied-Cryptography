@@ -106,6 +106,36 @@ def init_db():
     debug("database", "init_db", "Table ready: datasets")
 
     # ----------------------------------------------------------
+    # research_files
+    # Encrypted research notes written by researchers.
+    # Each file is linked to the clinician dataset it analyses.
+    # Encrypted with a per-file AES key wrapped using the researcher's
+    # own RSA public key -- only the author can decrypt their notes.
+    # This is intentional: research notes are personal work product,
+    # not shared data. Using RSA-per-author rather than the MDK ensures
+    # one researcher cannot read another's notes.
+    # ----------------------------------------------------------
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS research_files (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            researcher      TEXT NOT NULL,
+            dataset_id      INTEGER NOT NULL,
+            filename        TEXT NOT NULL,
+            ciphertext      TEXT NOT NULL,
+            iv              TEXT NOT NULL,
+            wrapped_key     TEXT NOT NULL,
+            created_at      TEXT NOT NULL,
+            FOREIGN KEY (dataset_id) REFERENCES datasets(id)
+        )
+    """)
+    # researcher  : username of the researcher who created this file
+    # dataset_id  : the clinician dataset this research relates to
+    # ciphertext  : base64 AES-CBC encrypted research notes
+    # iv          : base64 AES IV for the ciphertext
+    # wrapped_key : per-file AES key wrapped with researcher's RSA public key
+    debug("database", "init_db", "Table ready: research_files")
+
+    # ----------------------------------------------------------
     # findings
     # Digitally signed research findings (RSA-PSS).
     # ----------------------------------------------------------

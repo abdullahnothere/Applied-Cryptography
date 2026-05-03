@@ -138,9 +138,9 @@ def seed_test_accounts():
     #   carol_auditor    / AuditPass1!
     info("auth", "seed_test_accounts", "Seeding test accounts")
     accounts = [
-        ("alice_researcher", "ResearchPass1!", "researcher"),
-        ("bob_clinician",    "ClinicPass1!",   "clinician"),
-        ("carol_auditor",    "AuditPass1!",    "auditor"),
+        ("alice", "ResearchPass1!", "researcher"),
+        ("bob",    "ClinicPass1!",   "clinician"),
+        ("tom",    "AuditPass1!",    "auditor"),
     ]
     any_created = False
     for username, password, role in accounts:
