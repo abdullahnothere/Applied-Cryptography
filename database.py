@@ -1,58 +1,34 @@
-# =============================================================
-# database.py -- Database Initialisation and Connection
-# =============================================================
-# All table definitions live here. No business logic -- just
-# schema creation and the get_conn() helper.
-#
-# SQLite is used for portability. In production, switch to
-# PostgreSQL with encrypted storage at the infrastructure level
-# (e.g. AWS RDS with encryption-at-rest enabled).
-# =============================================================
+# database.py
+# Table definitions and connection helper.
+# Nothing else lives here — keeps schema changes easy to find.
 
 import sqlite3
 from config import DB_PATH
-from logger import debug, info, warn
+from logger import debug, info
 
 
 def get_conn():
-    # Return a database connection.
-    # Centralised here so DB_PATH is only specified in one place.
-    debug("database", "get_conn", f"Opening connection to {DB_PATH}")
+    debug("database", "get_conn", DB_PATH)
     return sqlite3.connect(DB_PATH)
 
 
 def init_db():
-    # Create all tables on first run.
-    # Uses IF NOT EXISTS so this is safe to call on every startup.
-    info("database", "init_db", "Initialising database schema")
+    info("database", "init_db", "checking schema")
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # ----------------------------------------------------------
-    # platform_keys
-    # Stores the Master Data Key (MDK) encrypted with the ROOT_KEY.
-    # Only one row should ever exist -- the platform has one MDK.
-    # UPGRADE: Add MDK versioning to support key rotation without
-    #          re-encrypting all datasets at once.
-    # ----------------------------------------------------------
+    # MDK encrypted with ROOT_KEY. Should only ever be one row.
     c.execute("""
         CREATE TABLE IF NOT EXISTS platform_keys (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            encrypted_mdk   TEXT NOT NULL,
-            iv              TEXT NOT NULL,
-            created_at      TEXT NOT NULL
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            encrypted_mdk TEXT NOT NULL,
+            iv            TEXT NOT NULL,
+            created_at    TEXT NOT NULL
         )
     """)
-    # encrypted_mdk : base64 AES-CBC ciphertext of the 32-byte MDK
-    # iv            : base64 AES IV used when encrypting the MDK
-    debug("database", "init_db", "Table ready: platform_keys")
 
-    # ----------------------------------------------------------
-    # mdk_wrappers
-    # Each row gives one researcher their own RSA-encrypted copy
-    # of the MDK. When a researcher joins, a new row is added.
-    # Revoking a researcher = deleting their row.
-    # ----------------------------------------------------------
+    # One row per researcher — their RSA-wrapped copy of the MDK.
+    # Delete a row to revoke that researcher's access.
     c.execute("""
         CREATE TABLE IF NOT EXISTS mdk_wrappers (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,35 +36,19 @@ def init_db():
             wrapped_mdk         TEXT NOT NULL
         )
     """)
-    # wrapped_mdk : MDK encrypted with this researcher's RSA public key (base64)
-    debug("database", "init_db", "Table ready: mdk_wrappers")
 
-    # ----------------------------------------------------------
-    # users
-    # Credentials and RSA key pairs per user.
-    # ----------------------------------------------------------
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             username      TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            role          TEXT NOT NULL,
-            public_key    TEXT NOT NULL,
-            private_key   TEXT NOT NULL
+            role          TEXT NOT NULL,        -- researcher | clinician | auditor
+            public_key    TEXT NOT NULL,        -- PEM, unencrypted
+            private_key   TEXT NOT NULL         -- PEM, PBKDF2+AES encrypted with user password
         )
     """)
-    # role        : 'researcher' | 'clinician' | 'auditor'
-    # public_key  : RSA public key PEM -- safe to store plaintext
-    # private_key : RSA private key PEM -- encrypted with user's password via PBKDF2+AES
-    debug("database", "init_db", "Table ready: users")
 
-    # ----------------------------------------------------------
-    # datasets
-    # Encrypted patient data uploaded by clinicians.
-    # Each dataset has its own per-dataset AES key (PDK).
-    # The PDK is wrapped with the MDK -- so decrypting requires:
-    #   RSA private key -> MDK -> PDK -> plaintext
-    # ----------------------------------------------------------
+    # wrapped_dataset_key stores "pdk_iv:wrapped_pdk" as a single field.
     c.execute("""
         CREATE TABLE IF NOT EXISTS datasets (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,63 +60,34 @@ def init_db():
             uploaded_at         TEXT NOT NULL
         )
     """)
-    # ciphertext          : base64 AES-CBC encrypted patient data
-    # iv                  : base64 AES IV for the dataset ciphertext
-    # wrapped_dataset_key : per-dataset AES key encrypted with the MDK (base64)
-    debug("database", "init_db", "Table ready: datasets")
 
-    # ----------------------------------------------------------
-    # research_files
-    # Encrypted research notes written by researchers.
-    # Each file is linked to the clinician dataset it analyses.
-    # Encrypted with a per-file AES key wrapped using the researcher's
-    # own RSA public key -- only the author can decrypt their notes.
-    # This is intentional: research notes are personal work product,
-    # not shared data. Using RSA-per-author rather than the MDK ensures
-    # one researcher cannot read another's notes.
-    # ----------------------------------------------------------
+    # Personal notes per researcher. Encrypted with a per-file key wrapped with
+    # the author's own RSA public key, not the MDK — so notes are private to the author.
     c.execute("""
         CREATE TABLE IF NOT EXISTS research_files (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            researcher      TEXT NOT NULL,
-            dataset_id      INTEGER NOT NULL,
-            filename        TEXT NOT NULL,
-            ciphertext      TEXT NOT NULL,
-            iv              TEXT NOT NULL,
-            wrapped_key     TEXT NOT NULL,
-            created_at      TEXT NOT NULL,
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            researcher  TEXT NOT NULL,
+            dataset_id  INTEGER NOT NULL,
+            filename    TEXT NOT NULL,
+            ciphertext  TEXT NOT NULL,
+            iv          TEXT NOT NULL,
+            wrapped_key TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
             FOREIGN KEY (dataset_id) REFERENCES datasets(id)
         )
     """)
-    # researcher  : username of the researcher who created this file
-    # dataset_id  : the clinician dataset this research relates to
-    # ciphertext  : base64 AES-CBC encrypted research notes
-    # iv          : base64 AES IV for the ciphertext
-    # wrapped_key : per-file AES key wrapped with researcher's RSA public key
-    debug("database", "init_db", "Table ready: research_files")
 
-    # ----------------------------------------------------------
-    # findings
-    # Digitally signed research findings (RSA-PSS).
-    # ----------------------------------------------------------
     c.execute("""
         CREATE TABLE IF NOT EXISTS findings (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             researcher TEXT NOT NULL,
             content    TEXT NOT NULL,
-            signature  TEXT NOT NULL,
+            signature  TEXT NOT NULL,   -- base64 RSA-PSS over content
             signed_at  TEXT NOT NULL
         )
     """)
-    # signature : base64 RSA-PSS signature over content using researcher's private key
-    debug("database", "init_db", "Table ready: findings")
 
-    # ----------------------------------------------------------
-    # audit_log
-    # Tamper-evident record of every significant action.
-    # HMAC-SHA256 on each row lets auditors detect modifications.
-    # Satisfies GDPR Article 5(2) accountability requirements.
-    # ----------------------------------------------------------
+    # hmac column covers "timestamp|actor|action|detail" — any edit breaks the tag.
     c.execute("""
         CREATE TABLE IF NOT EXISTS audit_log (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,9 +98,7 @@ def init_db():
             hmac      TEXT NOT NULL
         )
     """)
-    # hmac : HMAC-SHA256 over "timestamp|actor|action|detail"
-    debug("database", "init_db", "Table ready: audit_log")
 
     conn.commit()
     conn.close()
-    info("database", "init_db", "Database ready")
+    info("database", "init_db", "schema ready")

@@ -128,3 +128,4 @@ def unwrap_dataset_key(wrapped_pdk_b64, pdk_iv_b64, researcher_username, private
     pdk = aes_decrypt(pdk_iv_b64, wrapped_pdk_b64, mdk)
     debug("key_manager", "unwrap_dataset_key", "PDK recovered")
     return pdk
+    
